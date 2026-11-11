@@ -1,0 +1,66 @@
+name: Build Lens 2.1 EXE
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Tesseract OCR
+        shell: powershell
+        run: |
+          choco install tesseract --no-progress -y
+          $tess = "C:\Program Files\Tesseract-OCR"
+          if (!(Test-Path "$tess\tesseract.exe")) {
+            throw "Tesseract installation was not found"
+          }
+          New-Item -ItemType Directory -Force -Path "tesseract\tessdata" | Out-Null
+          Copy-Item "$tess\tesseract.exe" "tesseract\tesseract.exe"
+          if (Test-Path "$tess\*.dll") {
+            Copy-Item "$tess\*.dll" "tesseract\" -Force
+          }
+          $models = @("eng","rus","ukr","jpn","chi_sim","kor","deu","fra","spa")
+          foreach ($model in $models) {
+            Invoke-WebRequest "https://github.com/tesseract-ocr/tessdata_fast/raw/main/$model.traineddata" -OutFile "tesseract\tessdata\$model.traineddata"
+          }
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Verify bundled OCR languages
+        shell: powershell
+        run: |
+          & "tesseract\tesseract.exe" --tessdata-dir "tesseract\tessdata" --list-langs
+
+      - name: Build standalone EXE
+        shell: powershell
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --windowed `
+            --name Lens `
+            --add-data "tesseract;tesseract" `
+            --collect-submodules pytesseract `
+            --collect-submodules langdetect `
+            --exclude-module PySide6.QtWebEngine `
+            --exclude-module PySide6.QtQml `
+            --exclude-module PySide6.QtQuick `
+            --exclude-module PySide6.QtMultimedia `
+            --exclude-module tkinter `
+            lens.py
+
+      - name: Upload Lens 2.1
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lens-2.1-Windows-EXE
+          path: dist/Lens.exe
+          if-no-files-found: error
